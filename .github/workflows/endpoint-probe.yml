@@ -1,0 +1,13 @@
+name: endpoint-reachability
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: DNS and connect test
+        run: |
+          for h in maas-apigateway.dt.zte.com.cn nebulacoder-maas.zte.com.cn; do
+            echo "== $h"
+            getent hosts "$h" || echo "DNS: NXDOMAIN"
+            curl -sS -m 12 -o /dev/null -w "code=%{http_code} ip=%{remote_ip} t=%{time_total}\n" "https://$h/" || echo "connect failed: $?"
+          done

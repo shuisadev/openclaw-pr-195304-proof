@@ -121,10 +121,14 @@ done
 # ---------------------------------------------------------------- node host
 head_step "STAGE node host"
 mkdir -p "$PROOF/node"
+# deviceFolders capability is node-local consent: it is only advertised when the
+# node's own config enumerates worker folder roots, so the comma-bearing demo root
+# has to appear here too.
 cat >"$PROOF/node/openclaw.json" <<JSON
 { "nodeHost": { "workerRuns": { "enabled": true, "isolation": "container",
-  "containerImage": "node:24-bookworm-slim" } } }
+  "containerImage": "node:24-bookworm-slim", "folders": ["$COMMA_ROOT"] } } }
 JSON
+dump "node host config" cat "$PROOF/node/openclaw.json"
 
 start_node_host() {
   ( cd "$RUNTIME_DIR" && OPENCLAW_STATE_DIR="$PROOF/node" OPENCLAW_GATEWAY_TOKEN="$TOKEN" \

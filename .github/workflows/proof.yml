@@ -1,0 +1,46 @@
+name: shipped-container-session-proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "openclaw branch/ref to prove (default: PR #195304 head branch)"
+        required: false
+        default: "fix/node-worker-bind-mount-comma-377"
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout proof repo (scripts)
+        uses: actions/checkout@v4
+
+      - name: Checkout openclaw at PR ref
+        uses: actions/checkout@v4
+        with:
+          repository: shuisadev/openclaw
+          ref: ${{ inputs.ref }}
+          path: openclaw
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable corepack / pnpm
+        run: |
+          corepack enable || true
+          node -v
+
+      - name: Pre-pull worker image
+        run: docker pull node:24-bookworm-slim
+
+      - name: Run shipped container-session proof
+        env:
+          PROOF_REPO_DIR: ${{ github.workspace }}
+          PKG: ${{ github.workspace }}/openclaw
+        working-directory: openclaw
+        run: |
+          chmod +x "$PROOF_REPO_DIR/run-proof.sh"
+          bash "$PROOF_REPO_DIR/run-proof.sh" 2>&1 | tee "$PROOF_REPO_DIR"/proof-output.txt || true

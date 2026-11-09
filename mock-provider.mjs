@@ -12,6 +12,13 @@ function log(line) {
   } catch {}
 }
 
+function describeRequest(body) {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const tools = Array.isArray(body.tools) ? body.tools.map((t) => t?.function?.name ?? t?.name) : [];
+  const last = messages.at(-1) ?? {};
+  return `messages=${messages.length} hasToolResult=${messages.some((m) => m?.role === "tool")} tools=${JSON.stringify(tools)} lastRole=${last.role}`;
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     let data = "";
@@ -40,7 +47,7 @@ const server = http.createServer(async (req, res) => {
     } catch {}
     const messages = Array.isArray(body.messages) ? body.messages : [];
     const hasToolResult = messages.some((m) => m && m.role === "tool");
-    log(`POST chat/completions messages=${messages.length} hasToolResult=${hasToolResult}`);
+    log(`POST chat/completions ${describeRequest(body)}`);
     let message;
     let finish_reason;
     if (hasToolResult) {

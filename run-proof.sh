@@ -279,8 +279,18 @@ for i in $(seq 1 30); do
 done
 
 say "sessions.send (launches container worker turn)"
-GWCJ sessions.send "{\"key\":\"$SESSION_KEY\",\"message\":\"Write the marker file now.\",\"idempotencyKey\":\"comma195304-turn1\"}" >"$PROOF/send.json"
-dump "sessions.send" cat "$PROOF/send.json"
+# The first turn may fail while the worker runtime finishes installing; resend while the
+# workspace marker stays absent so a transient launch rejection cannot mask the mount check.
+for turn in 1 2 3; do
+  GWCJ sessions.send "{\"key\":\"$SESSION_KEY\",\"message\":\"Write the marker file now (turn $turn).\",\"idempotencyKey\":\"comma195304-turn$turn\"}" >"$PROOF/send.$turn.json"
+  dump "sessions.send (turn $turn)" cat "$PROOF/send.$turn.json"
+  for i in $(seq 1 20); do
+    [ -f "$DEVICE_FOLDER/MARKER_COMMA_195304.txt" ] && break
+    sleep 3
+  done
+  [ -f "$DEVICE_FOLDER/MARKER_COMMA_195304.txt" ] && break
+  say "turn $turn produced no workspace marker yet"
+done
 
 # ---------------------------------------------------------------- verify
 head_step "STAGE verify"
@@ -294,6 +304,10 @@ done
 if [ -n "$CONTAINER" ]; then
   dump "docker inspect mounts (comma source/target, bundle read-only, private HOME)" \
     docker inspect --type container --format '{{range .Mounts}}{{.Source}} -> {{.Destination}} rw={{.RW}}{{println}}{{end}}WORKDIR={{.Config.WorkingDir}}' "$CONTAINER"
+  dump "container argv/env/state" docker inspect --type container --format 'ARGS={{json .Args}}\nSTATE={{.State.Status}} exit={{.State.ExitCode}}\nHOME_ENV={{range .Config.Env}}{{if eq (slice . 0 4) "HOME"}}{{.}} {{end}}{{end}}' "$CONTAINER"
+  dump "container filesystem workspace" docker exec "$CONTAINER" sh -lc 'pwd; ls -la; cat MARKER_COMMA_195304.txt' 2>&1 || true
+  container_logs() { docker logs "$CONTAINER" 2>&1 | tail -30; }
+  dump "docker logs (container)" container_logs
 fi
 marker() { echo "host workspace listing:"; ls -la "$DEVICE_FOLDER"; echo "marker content:"; cat "$DEVICE_FOLDER/MARKER_COMMA_195304.txt" 2>/dev/null || echo "(marker not found)"; }
 dump "workspace marker on host" marker

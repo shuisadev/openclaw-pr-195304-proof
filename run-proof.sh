@@ -18,6 +18,19 @@ SESSION_KEY="agent:main:comma195304"
 
 mkdir -p "$PROOF" "$DEVICE_FOLDER"
 export PATH="$(dirname "$NODE_BIN"):$PATH"
+
+# The hosted runner exports NODE_EXTRA_CA_CERTS for its own proxy. The worker inherits it
+# through the sandbox environment allowlist, and the container launch then refuses a CA
+# file outside the admitted bundle/workspace. Keep the runner's trust settings (the mock
+# provider is plain http on loopback) and give the admitted workspace a copy so any host
+# that still forwards the variable resolves it inside the mount.
+if [ -n "${NODE_EXTRA_CA_CERTS:-}" ] && [ -f "$NODE_EXTRA_CA_CERTS" ]; then
+  cp "$NODE_EXTRA_CA_CERTS" "$DEVICE_FOLDER/runner-ca.pem"
+  export NODE_EXTRA_CA_CERTS="$DEVICE_FOLDER/runner-ca.pem"
+  echo "[proof] runner CA relocated into the admitted workspace: $NODE_EXTRA_CA_CERTS"
+else
+  echo "[proof] runner CA: ${NODE_EXTRA_CA_CERTS:-<unset>}"
+fi
 rm -f "$PROOF/requests.log" "$PROOF/nodehost.log" "$PROOF/gateway.log"
 
 say() { echo "[proof] $*"; }
@@ -131,11 +144,8 @@ JSON
 dump "node host config" cat "$PROOF/node/openclaw.json"
 
 start_node_host() {
-  # The hosted runner exports NODE_EXTRA_CA_CERTS for its own proxy; the node host would
-  # forward it into the worker container and refuse the launch because the CA file lives
-  # outside the admitted bundle/workspace. The mock provider is plain http on loopback.
   ( cd "$RUNTIME_DIR" && OPENCLAW_STATE_DIR="$PROOF/node" OPENCLAW_GATEWAY_TOKEN="$TOKEN" \
-    OPENCLAW_NO_AUTO_UPDATE=1 NODE_EXTRA_CA_CERTS= "$NODE_BIN" "$CLI" node run --host "$LAN_IP" --port "$GW_PORT" \
+    OPENCLAW_NO_AUTO_UPDATE=1 "$NODE_BIN" "$CLI" node run --host "$LAN_IP" --port "$GW_PORT" \
     --session-host --auth-from-env --display-name comma195304 ) >"$PROOF/nodehost.log" 2>&1 &
   NODE_PID=$!
 }

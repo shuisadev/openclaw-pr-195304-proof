@@ -153,7 +153,7 @@ node_pending_id() {
 
 # Does this session enumerate the node's worker host surface with device folders?
 worker_host_ready() {
-  GWCJ nodes.list '{}' | python3 -c '
+  GWCJ node.list '{}' | python3 -c '
 import json,sys
 try: data=json.load(sys.stdin)
 except Exception: sys.exit(1)
@@ -162,7 +162,9 @@ body=body if isinstance(body,dict) else data
 nodes=body.get("nodes") if isinstance(body,dict) else None
 for n in nodes or []:
     wh=n.get("workerHost") or {}
-    if wh.get("enabled") is True and wh.get("deviceFolders") is True:
+    # node.list projects only consent-gated fields; enabled:true appears on the
+    # richer inventory record, so accept either shape.
+    if wh.get("deviceFolders") is True and wh.get("enabled") is not False:
         print(n.get("nodeId"), json.dumps(wh))
         sys.exit(0)
 sys.exit(1)
@@ -196,17 +198,17 @@ fi
 READY=0
 SURFACE_INFO=""
 surface_shape() {
-  GWCJ nodes.list '{}' >"$PROOF/nodes.list.json" 2>"$PROOF/nodes.list.err" || true
-  python3 - "$PROOF/nodes.list.json" <<'PY'
+  GWCJ node.list '{}' >"$PROOF/node.list.json" 2>"$PROOF/node.list.err" || true
+  python3 - "$PROOF/node.list.json" <<'PY'
 import json,sys
 try:
     data=json.load(open(sys.argv[1]))
 except Exception as exc:
-    print("  nodes.list unparsable:", exc); raise SystemExit
+    print("  node.list unparsable:", exc); raise SystemExit
 body=data.get("result") if isinstance(data,dict) else None
 body=body if isinstance(body,dict) else data
 nodes=body.get("nodes") if isinstance(body,dict) else None
-print("  nodes.list keys:", sorted(body) if isinstance(body,dict) else type(body).__name__)
+print("  node.list keys:", sorted(body) if isinstance(body,dict) else type(body).__name__)
 for n in nodes or []:
     print("  node", n.get("nodeId"), "connected=", n.get("connected"), "status=", n.get("status"),
           "workerHost=", json.dumps(n.get("workerHost")), "keys=", sorted(n))

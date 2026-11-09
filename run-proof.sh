@@ -19,18 +19,14 @@ SESSION_KEY="agent:main:comma195304"
 mkdir -p "$PROOF" "$DEVICE_FOLDER"
 export PATH="$(dirname "$NODE_BIN"):$PATH"
 
-# The hosted runner exports NODE_EXTRA_CA_CERTS for its own proxy. The worker inherits it
-# through the sandbox environment allowlist, and the container launch then refuses a CA
-# file outside the admitted bundle/workspace. Keep the runner's trust settings (the mock
-# provider is plain http on loopback) and give the admitted workspace a copy so any host
-# that still forwards the variable resolves it inside the mount.
-if [ -n "${NODE_EXTRA_CA_CERTS:-}" ] && [ -f "$NODE_EXTRA_CA_CERTS" ]; then
-  cp "$NODE_EXTRA_CA_CERTS" "$DEVICE_FOLDER/runner-ca.pem"
-  export NODE_EXTRA_CA_CERTS="$DEVICE_FOLDER/runner-ca.pem"
-  echo "[proof] runner CA relocated into the admitted workspace: $NODE_EXTRA_CA_CERTS"
-else
-  echo "[proof] runner CA: ${NODE_EXTRA_CA_CERTS:-<unset>}"
-fi
+# The startup launcher supplies NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt when
+# it sees a version-manager runtime (NVM_DIR). Workers inherit it through the sandbox env
+# allowlist and the container launch then refuses a CA file outside the admitted
+# bundle/workspace. This proof uses a plain-http loopback provider, so start both daemons
+# without the version-manager marker. OPENCLAW_NODE_EXTRA_CA_CERTS_READY pins that choice.
+unset NVM_DIR
+export OPENCLAW_NODE_EXTRA_CA_CERTS_READY=1
+echo "[proof] NODE_EXTRA_CA_CERTS=${NODE_EXTRA_CA_CERTS:-<unset>} NVM_DIR=${NVM_DIR:-<unset>}"
 rm -f "$PROOF/requests.log" "$PROOF/nodehost.log" "$PROOF/gateway.log"
 
 say() { echo "[proof] $*"; }

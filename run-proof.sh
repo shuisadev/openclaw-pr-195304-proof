@@ -191,9 +191,29 @@ fi
 # already-approved identity instead of waiting on a retry that will not arrive.
 READY=0
 SURFACE_INFO=""
+surface_shape() {
+  GWCJ nodes.list '{}' >"$PROOF/nodes.list.json" 2>"$PROOF/nodes.list.err" || true
+  python3 - "$PROOF/nodes.list.json" <<'PY'
+import json,sys
+try:
+    data=json.load(open(sys.argv[1]))
+except Exception as exc:
+    print("  nodes.list unparsable:", exc); raise SystemExit
+body=data.get("result") if isinstance(data,dict) else None
+body=body if isinstance(body,dict) else data
+nodes=body.get("nodes") if isinstance(body,dict) else None
+print("  nodes.list keys:", sorted(body) if isinstance(body,dict) else type(body).__name__)
+for n in nodes or []:
+    print("  node", n.get("nodeId"), "connected=", n.get("connected"), "status=", n.get("status"),
+          "workerHost=", json.dumps(n.get("workerHost")), "keys=", sorted(n))
+PY
+  echo "  -- node host worker/hosting lines --"
+  grep -E 'worker|hosting|runner|inventory|disabled|capabilit|hello' "$PROOF/nodehost.log" | tail -25 || true
+}
 for i in $(seq 1 24); do
   if SURFACE_INFO="$(worker_host_ready)"; then READY=1; say "worker host ready after ${i}x5s: $SURFACE_INFO"; break; fi
   say "attempt $i: worker host not published yet"
+  if [ "$i" = "1" ] || [ $((i % 6)) -eq 0 ]; then dump "surface shape (attempt $i)" surface_shape; fi
   sleep 5
   if [ $((i % 6)) -eq 0 ]; then
     say "restarting node host onto its approved identity"
@@ -212,7 +232,16 @@ for i in $(seq 1 24); do
   fi
 done
 diagnose_nodehost() {
-  grep -E 'worker|runner|inventory|pairing|connected|disabled|capacity|docker|container|error' "$PROOF/nodehost.log" | tail -40
+  echo "-- full node host log --"
+  tail -120 "$PROOF/nodehost.log"
+  echo "-- archived attempts --"
+  for f in "$PROOF"/nodehost.attempt*.log; do
+    [ -f "$f" ] || continue
+    echo "== $f =="
+    tail -20 "$f"
+  done
+  echo "-- gateway worker/hosting lines --"
+  grep -E 'worker|hosting|runner|inventory' "$PROOF/gateway.log" | tail -40 || true
 }
 dump "node host diagnostics" diagnose_nodehost
 if [ "$READY" != "1" ]; then say "ABORT: node host never published its worker surface"; exit 1; fi

@@ -15,6 +15,8 @@ GW_PORT=19531
 COMMA_ROOT="$PROOF/work,space"
 DEVICE_FOLDER="$COMMA_ROOT/demo"
 SESSION_KEY="agent:main:comma195304"
+MODEL_BASE_URL="${MODEL_BASE_URL:-https://maas-apigateway.dt.zte.com.cn/model-public/tokenplan/v1}"
+MODEL_ID="${MODEL_ID:-glm-5.2}"
 
 mkdir -p "$PROOF" "$DEVICE_FOLDER"
 export PATH="$(dirname "$NODE_BIN"):$PATH"
@@ -22,12 +24,12 @@ export PATH="$(dirname "$NODE_BIN"):$PATH"
 # The startup launcher supplies NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt when
 # it sees a version-manager runtime (NVM_DIR). Workers inherit it through the sandbox env
 # allowlist and the container launch then refuses a CA file outside the admitted
-# bundle/workspace. This proof uses a plain-http loopback provider, so start both daemons
-# without the version-manager marker. OPENCLAW_NODE_EXTRA_CA_CERTS_READY pins that choice.
+# bundle/workspace. The model endpoint here is HTTPS with a public CA that the container
+# already trusts, so no extra bundle is needed. OPENCLAW_NODE_EXTRA_CA_CERTS_READY pins that.
 unset NVM_DIR
 export OPENCLAW_NODE_EXTRA_CA_CERTS_READY=1
 echo "[proof] NODE_EXTRA_CA_CERTS=${NODE_EXTRA_CA_CERTS:-<unset>} NVM_DIR=${NVM_DIR:-<unset>}"
-rm -f "$PROOF/requests.log" "$PROOF/nodehost.log" "$PROOF/gateway.log"
+rm -f "$PROOF/requests.log" "$PROOF/mock.log" "$PROOF/nodehost.log" "$PROOF/gateway.log"
 
 say() { echo "[proof] $*"; }
 head_step() { echo; echo "############ $* ############"; }
@@ -85,7 +87,7 @@ fi
 
 CLI="$RUNTIME_DIR/openclaw.mjs"
 GWC() { ( cd "$RUNTIME_DIR" && OPENCLAW_STATE_DIR="$PROOF/gw" "$NODE_BIN" "$CLI" "$@" ); }
-GWCJ() { GWC gateway call "$1" --params "$2" --json 2>&1; }
+GWCJ() { GWC gateway call "$1" --params "$2" --json --timeout "${3:-180000}" 2>&1; }
 
 cleanup() {
   say "cleanup: stopping background daemons"
@@ -98,34 +100,46 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------- mock + gateway
 head_step "STAGE gateway"
-say "start mock provider"
-"$NODE_BIN" "$SCRIPT_DIR/mock-provider.mjs" >"$PROOF/mock.log" 2>&1 &
-MOCK_PID=$!
-sleep 1
+# Real model provider: the OpenAI-compatible endpoint is public (resolves to a public
+# address from GitHub-hosted runners) and the key arrives as an encrypted repository
+# secret. It is written to an owner-only file and never echoed.
+if [ -z "${MODEL_API_KEY:-}" ]; then say "ABORT: MODEL_API_KEY is not set"; exit 1; fi
+KEY_FILE="$PROOF/model-key"
+( umask 077; printf '%s' "$MODEL_API_KEY" >"$KEY_FILE" )
+chmod 600 "$KEY_FILE"
+unset MODEL_API_KEY
+say "provider: $MODEL_ID at $MODEL_BASE_URL (key from secret, 0600 file)"
 
 mkdir -p "$PROOF/gw"
-cat >"$PROOF/gw/openclaw.json" <<JSON
-{
-  "gateway": { "mode": "local", "bind": "custom", "customBindHost": "$LAN_IP", "port": $GW_PORT,
-    "auth": { "mode": "token", "token": "$TOKEN" },
-    "nodes": { "pairing": { "autoApproveLocal": false } } },
-  "models": { "providers": { "prooflocal": { "api": "openai-completions",
-    "baseUrl": "http://127.0.0.1:19537/v1", "apiKey": "sk-local-proof",
-    "models": [{ "id": "proof-model", "name": "proof-model" }] } } },
-  "agents": { "defaults": { "model": "prooflocal/proof-model" } },
-  "tools": { "exec": { "security": "full" } },
-  "plugins": { "entries": { "browser": { "enabled": false }, "geolocation": { "enabled": false } } }
+python3 - "$PROOF/gw/openclaw.json" "$LAN_IP" "$GW_PORT" "$TOKEN" "$KEY_FILE" "$MODEL_BASE_URL" "$MODEL_ID" <<'PY'
+import json,sys
+path,lan,port,token,keyfile,base,model=sys.argv[1:8]
+key=open(keyfile).read().strip()
+cfg={
+ "gateway":{"mode":"local","bind":"custom","customBindHost":lan,"port":int(port),
+   "auth":{"mode":"token","token":token},
+   "nodes":{"pairing":{"autoApproveLocal":False}}},
+ "models":{"providers":{"real":{"api":"openai-completions","baseUrl":base,"apiKey":key,
+   "models":[{"id":model,"name":model,"contextWindow":1000000,"maxTokens":131072}]}}},
+ "agents":{"defaults":{"model":"real/"+model}},
+ "tools":{"exec":{"security":"full"}},
+ "plugins":{"entries":{"browser":{"enabled":False},"geolocation":{"enabled":False}}},
 }
-JSON
+json.dump(cfg,open(path,"w"),indent=2)
+print("gateway config written (model=" + model + ")")
+PY
+rm -f "$KEY_FILE"
 
 say "start gateway on $LAN_IP:$GW_PORT"
 ( cd "$RUNTIME_DIR" && OPENCLAW_STATE_DIR="$PROOF/gw" OPENCLAW_NO_AUTO_UPDATE=1 OPENCLAW_DEBUG=1 \
   "$NODE_BIN" "$CLI" gateway >"$PROOF/gateway.log" 2>&1 ) &
 GW_PID=$!
-for i in $(seq 1 90); do
+for i in $(seq 1 150); do
   if ss -tln 2>/dev/null | grep -q ":$GW_PORT "; then say "gateway listening after ${i}s"; break; fi
   sleep 1
 done
+ss -tln 2>/dev/null | grep -q ":$GW_PORT " || { say "ABORT: gateway never listened"; tail -40 "$PROOF/gateway.log"; exit 1; }
+dump "gateway models.list (real provider catalog)" GWCJ models.list '{}' 120000
 
 # ---------------------------------------------------------------- node host
 head_step "STAGE node host"
@@ -282,9 +296,9 @@ say "sessions.send (launches container worker turn)"
 # The first turn may fail while the worker runtime finishes installing; resend while the
 # workspace marker stays absent so a transient launch rejection cannot mask the mount check.
 for turn in 1 2 3; do
-  GWCJ sessions.send "{\"key\":\"$SESSION_KEY\",\"message\":\"Write the marker file now (turn $turn).\",\"idempotencyKey\":\"comma195304-turn$turn\"}" >"$PROOF/send.$turn.json"
+  GWCJ sessions.send "{\"key\":\"$SESSION_KEY\",\"message\":\"In your current working directory create the file MARKER_COMMA_195304.txt containing exactly the single line MARKER_COMMA_195304, then reply with COMMA_WORKSPACE_PROOF_OK. Do not ask questions.\",\"idempotencyKey\":\"comma195304-turn$turn\"}" >"$PROOF/send.$turn.json"
   dump "sessions.send (turn $turn)" cat "$PROOF/send.$turn.json"
-  for i in $(seq 1 20); do
+  for i in $(seq 1 40); do
     [ -f "$DEVICE_FOLDER/MARKER_COMMA_195304.txt" ] && break
     sleep 3
   done
@@ -315,11 +329,11 @@ if [ -n "$CONTAINER" ]; then
   marker_inside() { docker exec "$CONTAINER" sh -lc 'echo HOME=$HOME; cat MARKER_COMMA_195304.txt' 2>&1; }
   dump "marker inside container (HOME should be private worker HOME)" marker_inside
 fi
-dump "mock provider request log" cat "$PROOF/requests.log"
+dump "worker transcript (gateway llm call lines)" bash -c "grep -iE 'llm|provider|model|token usage|completion' '$PROOF/gateway.log' | tail -25"
 
 say "wait for assistant final message"
 FINAL=""
-for i in $(seq 1 20); do
+for i in $(seq 1 40); do
   FINAL="$(GWCJ chat.history "{\"sessionKey\":\"$SESSION_KEY\"}" | grep -o 'COMMA_WORKSPACE_PROOF_OK[^"]*' | head -1)"
   if [ -n "$FINAL" ]; then say "assistant finalized after ${i}x3s"; break; fi
   sleep 3
@@ -337,3 +351,17 @@ diag_all() {
 dump "diagnostics" diag_all
 
 say "DONE build_ok=$BUILD_OK container=$CONTAINER final=$FINAL"
+
+# A green workflow must mean the shipped flow worked, so the verdict drives the exit code.
+MARKER_OK=0
+[ -f "$DEVICE_FOLDER/MARKER_COMMA_195304.txt" ] && [ "$(cat "$DEVICE_FOLDER/MARKER_COMMA_195304.txt")" = "MARKER_COMMA_195304" ] && MARKER_OK=1
+CONTAINER_OK=0
+if [ -n "$CONTAINER" ]; then
+  docker inspect --type container --format '{{range .Mounts}}{{.Source}}{{println}}{{end}}' "$CONTAINER" | grep -qF "$COMMA_ROOT" && CONTAINER_OK=1
+fi
+if [ "$BUILD_OK" = "1" ] && [ "$MARKER_OK" = "1" ] && [ "$CONTAINER_OK" = "1" ] && [ -n "$FINAL" ]; then
+  say "VERDICT pass: real-model session wrote the marker through a container worker mounted from the comma path"
+  exit 0
+fi
+say "VERDICT fail: build_ok=$BUILD_OK marker_ok=$MARKER_OK container_ok=$CONTAINER_OK final=${FINAL:-none}"
+exit 1

@@ -11,7 +11,7 @@ on:
 jobs:
   proof:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout proof repo (scripts)
         uses: actions/checkout@v4

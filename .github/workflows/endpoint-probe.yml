@@ -4,10 +4,10 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: DNS and connect test
+      - name: POST chat/completions with secret key
+        env:
+          K: ${{ secrets.MODEL_API_KEY }}
         run: |
-          for h in maas-apigateway.dt.zte.com.cn nebulacoder-maas.zte.com.cn; do
-            echo "== $h"
-            getent hosts "$h" || echo "DNS: NXDOMAIN"
-            curl -sS -m 12 -o /dev/null -w "code=%{http_code} ip=%{remote_ip} t=%{time_total}\n" "https://$h/" || echo "connect failed: $?"
-          done
+          B=https://maas-apigateway.dt.zte.com.cn/model-public/tokenplan/v1
+          echo "== GET /models"; curl -sS -m 20 -o /tmp/m.txt -w "code=%{http_code} ctype=%{content_type}\n" -H "authorization: Bearer $K" "$B/models"; head -c 200 /tmp/m.txt; echo
+          echo "== POST /chat/completions"; curl -sS -m 40 -o /tmp/c.txt -w "code=%{http_code} ctype=%{content_type}\n" -H "content-type: application/json" -H "authorization: Bearer $K" -d '{"model":"glm-5.2","messages":[{"role":"user","content":"reply OK"}],"max_tokens":8}' "$B/chat/completions"; head -c 400 /tmp/c.txt; echo

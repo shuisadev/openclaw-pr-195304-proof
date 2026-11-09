@@ -131,8 +131,11 @@ JSON
 dump "node host config" cat "$PROOF/node/openclaw.json"
 
 start_node_host() {
+  # The hosted runner exports NODE_EXTRA_CA_CERTS for its own proxy; the node host would
+  # forward it into the worker container and refuse the launch because the CA file lives
+  # outside the admitted bundle/workspace. The mock provider is plain http on loopback.
   ( cd "$RUNTIME_DIR" && OPENCLAW_STATE_DIR="$PROOF/node" OPENCLAW_GATEWAY_TOKEN="$TOKEN" \
-    OPENCLAW_NO_AUTO_UPDATE=1 "$NODE_BIN" "$CLI" node run --host "$LAN_IP" --port "$GW_PORT" \
+    OPENCLAW_NO_AUTO_UPDATE=1 NODE_EXTRA_CA_CERTS= "$NODE_BIN" "$CLI" node run --host "$LAN_IP" --port "$GW_PORT" \
     --session-host --auth-from-env --display-name comma195304 ) >"$PROOF/nodehost.log" 2>&1 &
   NODE_PID=$!
 }

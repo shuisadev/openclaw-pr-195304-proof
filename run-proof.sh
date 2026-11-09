@@ -15,8 +15,8 @@ GW_PORT=19531
 COMMA_ROOT="$PROOF/work,space"
 DEVICE_FOLDER="$COMMA_ROOT/demo"
 SESSION_KEY="agent:main:comma195304"
-MODEL_BASE_URL="${MODEL_BASE_URL:-https://maas-apigateway.dt.zte.com.cn/model-public/tokenplan/v1}"
-MODEL_ID="${MODEL_ID:-glm-5.2}"
+MODEL_BASE_URL="${MODEL_BASE_URL:-https://api.deepseek.com/v1}"
+MODEL_ID="${MODEL_ID:-deepseek-v4-flash}"
 
 mkdir -p "$PROOF" "$DEVICE_FOLDER"
 export PATH="$(dirname "$NODE_BIN"):$PATH"
@@ -334,7 +334,24 @@ dump "worker transcript (gateway llm call lines)" bash -c "grep -iE 'llm|provide
 say "wait for assistant final message"
 FINAL=""
 for i in $(seq 1 40); do
-  FINAL="$(GWCJ chat.history "{\"sessionKey\":\"$SESSION_KEY\"}" | grep -o 'COMMA_WORKSPACE_PROOF_OK[^"]*' | head -1)"
+  # Assistant text only: the user prompt also contains the sentinel, so match the assistant
+  # role line instead of any occurrence in the history payload.
+  FINAL="$(GWCJ chat.history "{\"sessionKey\":\"$SESSION_KEY\"}" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+try: data=json.loads(raw)
+except Exception: sys.exit(0)
+body=data.get("result") if isinstance(data,dict) else None
+body=body if isinstance(body,dict) else data
+msgs=(body or {}).get("messages") or (body or {}).get("history") or []
+for m in reversed(msgs):
+    if m.get("role") != "assistant": continue
+    c=m.get("content")
+    if isinstance(c, list):
+        c=" ".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
+    if isinstance(c,str) and "COMMA_WORKSPACE_PROOF_OK" in c:
+        print("COMMA_WORKSPACE_PROOF_OK"); break
+')"
   if [ -n "$FINAL" ]; then say "assistant finalized after ${i}x3s"; break; fi
   sleep 3
 done

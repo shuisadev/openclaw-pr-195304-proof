@@ -41,8 +41,8 @@ jobs:
           PROOF_REPO_DIR: ${{ github.workspace }}
           PKG: ${{ github.workspace }}/openclaw
           MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
-          MODEL_BASE_URL: https://maas-apigateway.dt.zte.com.cn/model-public/tokenplan/v1
-          MODEL_ID: glm-5.2
+          MODEL_BASE_URL: https://api.deepseek.com/v1
+          MODEL_ID: deepseek-v4-flash
         working-directory: openclaw
         run: |
           chmod +x "$PROOF_REPO_DIR/run-proof.sh"
